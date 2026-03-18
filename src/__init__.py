@@ -1,0 +1,1 @@
+"""Receipt OCR project package."""

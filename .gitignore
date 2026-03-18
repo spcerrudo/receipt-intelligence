@@ -1,0 +1,68 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Conda
+.conda/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Project data artifacts
+data/interim/
+data/processed/
+data/raw
+
+# Generated outputs
+outputs/raw_ocr/
+outputs/corrected_entities/
+outputs/metrics/
+outputs/figures/
+
+# Large model artifacts and checkpoints
+*.bin
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Jupyter
+.ipynb_checkpoints/
