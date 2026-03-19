@@ -26,24 +26,46 @@ class ReceiptPipeline:
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or get_config()
-        self.ocr_engines = self._build_ocr_engines()
+        self.ocr_engines: dict[str, object] = {}
+        self.available_ocr_backends = self._build_ocr_backend_registry()
         self.llm_client = self._build_llm_client()
         self.extractor = EntityExtractor(self.config, llm_client=self.llm_client)
         self.corrector = EntityCorrector(llm_client=self.llm_client)
         self.evaluator = Evaluator()
         self.dataset_loader = SROIEDatasetLoader(self.config.data_root)
 
-    def _build_ocr_engines(self) -> dict[str, object]:
-        engines: dict[str, object] = {"paddle": PaddleOCREngine(lang=self.config.ocr_lang)}
+    def _build_ocr_backend_registry(self) -> list[str]:
+        backends = ["paddle", "box_reference"]
         try:
-            engines["bedrock_multimodal"] = BedrockMultimodalOCREngine(
+            boto3_available = True
+            _ = self.config.aws_region
+            _ = self.config.bedrock_mm_model_id
+        except Exception:
+            boto3_available = False
+        if boto3_available:
+            backends.append("bedrock_multimodal")
+        return backends
+
+    def _get_ocr_engine(self, backend: str) -> object:
+        if backend in self.ocr_engines:
+            return self.ocr_engines[backend]
+
+        logger.info("Initializing OCR backend `%s`...", backend)
+        if backend == "paddle":
+            engine = PaddleOCREngine(lang=self.config.ocr_lang)
+        elif backend == "bedrock_multimodal":
+            engine = BedrockMultimodalOCREngine(
                 region_name=self.config.aws_region,
                 model_id=self.config.bedrock_mm_model_id,
             )
-        except Exception as exc:
-            logger.warning("Bedrock multimodal OCR unavailable, continuing without it: %s", exc)
-        engines["box_reference"] = BoxFileOCREngine()
-        return engines
+        elif backend == "box_reference":
+            engine = BoxFileOCREngine()
+        else:
+            raise ValueError(f"OCR backend `{backend}` is not supported")
+
+        self.ocr_engines[backend] = engine
+        logger.info("OCR backend `%s` initialized", backend)
+        return engine
 
     def _build_llm_client(self) -> LLMClient | None:
         if self.config.llm_provider == "openai" and not self.config.openai_api_key:
@@ -103,12 +125,13 @@ class ReceiptPipeline:
         if ocr_backend == "box_reference":
             if not box_path:
                 raise ValueError("box_path is required for box_reference OCR")
-            return self.ocr_engines["box_reference"].run_from_box_file(box_path)
+            engine = self._get_ocr_engine("box_reference")
+            return engine.run_from_box_file(box_path)
 
-        if ocr_backend not in self.ocr_engines:
+        if ocr_backend not in self.available_ocr_backends:
             raise ValueError(f"OCR backend `{ocr_backend}` is not available")
 
-        engine = self.ocr_engines[ocr_backend]
+        engine = self._get_ocr_engine(ocr_backend)
         use_preprocessing = self.config.use_preprocessing if use_preprocessing is None else use_preprocessing
         image = engine.load_image(image_path)
         if ocr_backend == "paddle" and use_preprocessing:
@@ -142,9 +165,11 @@ class ReceiptPipeline:
             },
         }
         outputs: dict[str, pd.DataFrame] = {}
+        combined_summaries: list[pd.DataFrame] = []
+        combined_overall_rows: list[dict[str, object]] = []
 
         for mode_name, options in modes.items():
-            if options["ocr_backend"] not in self.ocr_engines:
+            if options["ocr_backend"] not in self.available_ocr_backends:
                 logger.warning("Skipping mode `%s` because OCR backend `%s` is unavailable", mode_name, options["ocr_backend"])
                 continue
             comparison_rows: list[dict[str, object]] = []
@@ -206,7 +231,56 @@ class ReceiptPipeline:
             summary = self.evaluator.summarize(comparison_rows)
             self.evaluator.save_summary(self.config.output_root / "metrics", mode_name, summary, details)
             outputs[mode_name] = summary
+            combined_summaries.append(summary.assign(mode=mode_name))
+            combined_overall_rows.append(
+                {
+                    "mode": mode_name,
+                    "num_records_evaluated": details["image_path"].nunique(),
+                    "num_field_rows": len(details),
+                    "num_entities_extracted": int(details["extracted"].sum()),
+                    "overall_exact_match_accuracy": float(details["exact_match"].mean()),
+                    "overall_avg_fuzzy_score": float(details["fuzzy_score"].mean()),
+                }
+            )
             logger.info("\nMode: %s\n%s", mode_name, summary.to_string(index=False))
+
+        metrics_dir = self.config.output_root / "metrics"
+        if combined_summaries:
+            combined_summary = pd.concat(combined_summaries, ignore_index=True)
+            combined_summary = combined_summary[
+                ["mode", "field", "num_entities_extracted", "exact_match_accuracy", "avg_fuzzy_score"]
+            ]
+            combined_summary.to_csv(metrics_dir / "combined_mode_field_summary.csv", index=False)
+            logger.info("Wrote combined field summary to %s", metrics_dir / "combined_mode_field_summary.csv")
+
+            exact_pivot = combined_summary.pivot(
+                index="field",
+                columns="mode",
+                values="exact_match_accuracy",
+            ).reset_index()
+            exact_pivot.to_csv(metrics_dir / "combined_exact_match_pivot.csv", index=False)
+            logger.info("Wrote exact-match pivot to %s", metrics_dir / "combined_exact_match_pivot.csv")
+
+            fuzzy_pivot = combined_summary.pivot(
+                index="field",
+                columns="mode",
+                values="avg_fuzzy_score",
+            ).reset_index()
+            fuzzy_pivot.to_csv(metrics_dir / "combined_fuzzy_score_pivot.csv", index=False)
+            logger.info("Wrote fuzzy-score pivot to %s", metrics_dir / "combined_fuzzy_score_pivot.csv")
+
+            extracted_pivot = combined_summary.pivot(
+                index="field",
+                columns="mode",
+                values="num_entities_extracted",
+            ).reset_index()
+            extracted_pivot.to_csv(metrics_dir / "combined_extracted_count_pivot.csv", index=False)
+            logger.info("Wrote extracted-count pivot to %s", metrics_dir / "combined_extracted_count_pivot.csv")
+
+        if combined_overall_rows:
+            combined_overall = pd.DataFrame(combined_overall_rows).sort_values("mode").reset_index(drop=True)
+            combined_overall.to_csv(metrics_dir / "combined_mode_overall_summary.csv", index=False)
+            logger.info("Wrote combined overall summary to %s", metrics_dir / "combined_mode_overall_summary.csv")
         return outputs
 
     def answer_question(self, corrected_entities: dict[str, Any], question: str) -> str:
@@ -281,7 +355,7 @@ def main() -> None:
 
     logger.info("Initializing pipeline components...")
     pipeline = ReceiptPipeline()
-    logger.info("Pipeline initialized. OCR backends available: %s", ", ".join(sorted(pipeline.ocr_engines)))
+    logger.info("Pipeline initialized. OCR backends available: %s", ", ".join(sorted(pipeline.available_ocr_backends)))
 
     if args.command == "run-one":
         result = pipeline.run_receipt(

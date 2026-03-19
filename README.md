@@ -96,6 +96,14 @@ This runs the exact four assessment modes:
 
 Metrics are written to `outputs/metrics/`.
 
+Centralized comparison artifacts are also written to:
+
+- `outputs/metrics/combined_mode_field_summary.csv`
+- `outputs/metrics/combined_mode_overall_summary.csv`
+- `outputs/metrics/combined_exact_match_pivot.csv`
+- `outputs/metrics/combined_fuzzy_score_pivot.csv`
+- `outputs/metrics/combined_extracted_count_pivot.csv`
+
 ## How Performance Is Compared Programmatically
 
 For each split and each mode, the pipeline:
@@ -111,11 +119,30 @@ For each split and each mode, the pipeline:
    - fuzzy match score for text-heavy fields such as `vendor_name` and `address`
 7. Writes detail and summary CSV files per mode.
 
+It also writes centralized comparison tables across all evaluated modes:
+
+- one combined per-field summary
+- one combined overall mode-level summary
+- one exact-match pivot table
+- one fuzzy-score pivot table
+- one extracted-count pivot table
+
 ## Launch Gradio App
 
 ```bash
 python -m src.app_gradio
 ```
+
+The Gradio app includes:
+
+- a receipt upload and Q&A demo
+- an evaluation tab to run the benchmark from the UI
+- charts for exact-match and fuzzy-score comparisons across modes
+- a raw-value drilldown table showing `predicted` vs `ground_truth`
+
+For a detailed explanation of each metric and how to interpret it, see:
+
+- `docs/metrics_guide.md`
 
 ## Testing
 

@@ -33,6 +33,7 @@ def test_run_receipt_returns_expected_fields():
         {"use_preprocessing": False, "output_root": ROOT / "outputs", "min_field_confidence": 0.65},
     )()
     pipeline.ocr_engines = {"paddle": FakeOCREngine()}
+    pipeline.available_ocr_backends = ["paddle"]
     pipeline.llm_client = None
 
     from src.entity_correction import EntityCorrector
@@ -70,6 +71,7 @@ def test_evaluate_split_returns_exact_assessment_modes():
     )()
     fake_engine = FakeOCREngine()
     pipeline.ocr_engines = {"paddle": fake_engine, "bedrock_multimodal": fake_engine}
+    pipeline.available_ocr_backends = ["paddle", "bedrock_multimodal"]
     pipeline.llm_client = None
 
     from src.entity_correction import EntityCorrector
